@@ -30,11 +30,34 @@ static void busy_wait (int64_t loops);
 static void real_time_sleep (int64_t num, int32_t denom);
 static void real_time_delay (int64_t num, int32_t denom);
 
+
+// ** Def. of sleeping_thread_list **
+struct list sleeping_thread_list;       // A list to store sleeping threads
+struct lock sleeping_thread_list_lock;  // Used for synchronization
+// ** Def. of compare function for sleeping threads **
+static bool cmp_fnc(const struct list_elem *a, const struct list_elem *b, void * aux UNUSED);
+
+// ** compare function for sleeping threads **
+static bool
+cmp_fnc(const struct list_elem *a, const struct list_elem *b, void * aux UNUSED)
+{
+  struct sleeping_thread_elem* elem_a = list_entry(a, struct sleeping_thread_elem, _list_elem);
+  struct sleeping_thread_elem* elem_b = list_entry(b, struct sleeping_thread_elem, _list_elem);
+  return elem_a->_ticks < elem_b->_ticks;
+}
+// ****
+
+
 /* Sets up the timer to interrupt TIMER_FREQ times per second,
    and registers the corresponding interrupt. */
 void
 timer_init (void) 
 {
+  // ** Initialize list and lock **
+  list_init(&sleeping_thread_list);       // Initialize the list
+  lock_init(&sleeping_thread_list_lock);  // Initialize sleeping_thread_list_lock
+  // ****
+
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
 }
@@ -89,11 +112,30 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
+  // ** Prevent negative times **
+  if(ticks <= 0) return;          // Prevent negative values.
+  // ****
+
   int64_t start = timer_ticks ();
 
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+
+  // ** Sleep the thread **
+  struct thread* _thread = thread_current();
+  struct semaphore _semaphore;
+  sema_init(&_semaphore, 0);
+
+  struct sleeping_thread_elem curr_elem;
+  curr_elem._semaphore = &_semaphore;
+  curr_elem._thread = _thread;
+  curr_elem._ticks = ticks + start;
+
+  lock_acquire(&sleeping_thread_list_lock);
+  list_insert_ordered(&sleeping_thread_list, &curr_elem._list_elem, &cmp_fnc, NULL);
+  lock_release(&sleeping_thread_list_lock);
+
+  sema_down(&_semaphore);
+  // ****
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -171,6 +213,22 @@ static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
+
+
+  // ** Find sleeping threads that need to wake up and wake them up **
+  while(!list_empty(&sleeping_thread_list)){
+    struct sleeping_thread_elem* thread_elem = list_entry(list_begin(&sleeping_thread_list), struct sleeping_thread_elem, _list_elem);
+    if(ticks >= thread_elem->_ticks){
+      sema_up(thread_elem->_semaphore);
+      // Remove from the list
+      list_pop_front(&sleeping_thread_list);
+      continue;
+    }
+    break;
+  }
+  // ****
+
+
   thread_tick ();
 }
 

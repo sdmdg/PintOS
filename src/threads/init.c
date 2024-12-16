@@ -59,7 +59,7 @@ static size_t user_page_limit = SIZE_MAX;
 
 static void bss_init (void);
 static void paging_init (void);
-
+void read_line(char line[], size_t size);
 static char **read_command_line (void);
 static char **parse_options (char **argv);
 static void run_actions (char **argv);
@@ -128,17 +128,101 @@ pintos_init (void)
 #endif
 
   printf ("Boot complete.\n");
-  
-  if (*argv != NULL) {
     /* Run actions specified on kernel command line. */
+  if (*argv != NULL) {
     run_actions (argv);
   } else {
-    // TODO: no command line passed to kernel. Run interactively 
+    while(1) {
+    printf("Malaka> ");
+    char line[10];
+    read_line(line, 10);
+
+    int command = -1;
+
+    if (strcmp(line, "whoami") == 0) {
+        command = 0;
+    } else if (strcmp(line, "shutdown") == 0) {
+        command = 1;
+    } else if (strcmp(line, "time") == 0) {
+        command = 2;
+    } else if (strcmp(line, "ram") == 0) {
+        command = 3;
+    } else if (strcmp(line, "thread") == 0) {
+        command = 4;
+    } else if (strcmp(line, "priority") == 0) {
+        command = 5;
+    } else if (strcmp(line, "exit") == 0) {
+        command = 6;
+    }
+
+    switch(command) {
+        case 0:
+            printf("  > Name  : GUNAWARDANA S.D.M.D.\n  > Index : 220201N\n  > GitHub: https://github.com/sdmdg\n");
+            break;
+        case 1:
+            printf("Shutting Down...\n");
+            shutdown();
+            thread_exit();
+            break;
+        case 2:
+            printf("Time since Unix epoch: %lu seconds\n", rtc_get_time());
+            break;
+        case 3:
+            printf("Available RAM: %u KB\n", init_ram_pages * PGSIZE / 1024);
+            break;
+        case 4:
+            thread_print_stats();
+            break;
+        case 5:
+            printf("Priority number: %d\n", thread_get_priority());
+            printf("Priority level : ");
+            switch(thread_get_priority()) {
+                case 1:
+                    printf("Low\n");
+                    break;
+                case 31:
+                    printf("Medium\n");
+                    break;
+                case 63:
+                    printf("High\n");
+                    break;
+                default:
+                    break;
+            }
+            break;
+        case 6:
+            printf("Exiting Shell..\n");
+            return;
+        default:
+            printf("Re-enter a valid command!\n");
+            break;
+    }
   }
+}
 
   /* Finish up. */
   shutdown ();
   thread_exit ();
+}
+void read_line(char buffer[], size_t max_length) {
+    char ch;
+    char* current = buffer;
+
+    while ((ch = input_getc()) != '\r') {
+        if (current >= buffer + max_length - 1) {
+            printf("\nInput limit reached\n");
+            break;
+        } else if (ch != '\b') {
+            printf("%c", ch);
+            *current++ = ch;
+        } else if (current > buffer) {
+            printf("\b \b");
+            --current;
+        }
+    }
+
+    *current = '\0';
+    printf("\n");
 }
 
 /* Clear the "BSS", a segment that should be initialized to

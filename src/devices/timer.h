@@ -4,8 +4,26 @@
 #include <round.h>
 #include <stdint.h>
 
+
+// ** For list functions **
+#include "lib/kernel/list.h"
+// ****
+
+
 /* Number of timer interrupts per second. */
 #define TIMER_FREQ 100
+
+
+// ** Struct of sleeping thread element **
+struct sleeping_thread_elem
+{
+	struct thread* _thread;         // Thread, which is going to sleep
+    struct semaphore* _semaphore;   // Semaphore, used for unblocking a thread
+	int64_t _ticks;                  // Sleeping time
+    struct list_elem _list_elem;    // For managing the list
+};
+// ****
+
 
 void timer_init (void);
 void timer_calibrate (void);

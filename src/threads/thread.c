@@ -23,6 +23,8 @@
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
 static struct list ready_list;
+/* List of blocked processes. */
+static struct list blocked_list;
 
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
@@ -70,6 +72,21 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
+static bool thread_sleep_compare(const struct list_elem *a_, const struct list_elem *b_, void *aux UNUSED);
+
+/* If thread_a wakes before thread_b, true. Otherwise, false. */
+static bool
+thread_sleep_compare (const struct list_elem *a_, const struct list_elem *b_,
+            void *aux UNUSED) 
+{
+  const struct thread *thread_a = list_entry (a_, struct thread, blockedelem);
+  const struct thread *thread_b = list_entry (b_, struct thread, blockedelem);
+  
+  if (thread_a->sleep_ticks == thread_b->sleep_ticks)
+    return thread_a->priority > thread_b->priority;
+  else 
+    return thread_a->sleep_ticks < thread_b->sleep_ticks;
+}
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -88,7 +105,7 @@ void
 thread_init (void) 
 {
   ASSERT (intr_get_level () == INTR_OFF);
-
+  list_init (&blocked_list);  
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
@@ -198,6 +215,14 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
+  /* Add child thread to the list */
+  list_push_back(&thread_current()->child_list, &t->child_elem);
+  t->parent_t = thread_current();
+  /* Semaphore init*/
+  sema_init(&t->pre_exit_sema, 0);
+  sema_init(&t->init_sema, 0);
+  sema_init(&t->exit_sema, 0);
+
   /* Add to run queue. */
   thread_unblock (t);
 
@@ -240,6 +265,53 @@ thread_unblock (struct thread *t)
   list_push_back (&ready_list, &t->elem);
   t->status = THREAD_READY;
   intr_set_level (old_level);
+}
+static struct list sleeping_threads;
+static struct lock sleeping_threads_lock;
+
+/* Put a process to sleep, i.e. block it until at least some number of ticks */
+void thread_sleep(int64_t ticks) {
+    struct thread *cur = thread_current();
+    enum intr_level old_level;
+
+    ASSERT(!intr_context());
+
+    old_level = intr_disable();
+    if (cur != idle_thread) {
+        int64_t wake_time = timer_ticks() + ticks;
+        cur->sleep_ticks = wake_time;
+        // Insert the thread in the list.
+        struct list_elem *e;
+        for (e = list_begin(&sleeping_threads); e != list_end(&sleeping_threads); e = list_next(e)) {
+            struct thread *t = list_entry(e, struct thread, blockedelem);
+            if (wake_time < t->sleep_ticks) {
+                break;
+            }
+        }
+        list_insert(&e->prev, &cur->blockedelem);
+        thread_block();
+    }
+    intr_set_level(old_level);
+}
+
+void thread_wake(int64_t cur_ticks) {
+    struct thread *t;
+    struct list_elem *e;
+
+    lock_acquire(&sleeping_threads_lock);
+
+    // Iterate through the list and wake up
+    for (e = list_begin(&sleeping_threads); e != list_end(&sleeping_threads); ) {
+        t = list_entry(e, struct thread, blockedelem);
+        if (t->sleep_ticks <= cur_ticks) {
+            e = list_remove(e);
+            t->sleep_ticks = 0;
+            thread_unblock(t);
+        } else {
+            break;
+        }
+    }
+    lock_release(&sleeping_threads_lock);
 }
 
 /* Returns the name of the running thread. */
@@ -462,7 +534,15 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  
+  /* Setting next_fd */
+  t->next_fd = 2;
   t->magic = THREAD_MAGIC;
+
+  /* Initializing lists*/
+  list_init(&t->child_list);
+  list_init(&t->open_fd_list);
+  t->exit_status = -1;
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
